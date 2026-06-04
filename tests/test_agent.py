@@ -130,7 +130,10 @@ def test_agent_limits_streaming_output_per_stream(tmp_path: Path, capsys):
     assert "Elapsed:" in captured.out
     assert "Transcript saved:" in captured.out
     assert not (tmp_path / "demo.txt").exists()
-    assert list((tmp_path / ".mini_codex" / "runs").glob("*.md"))
+    transcript = next((tmp_path / ".mini_codex" / "runs").glob("*.md")).read_text(encoding="utf-8")
+    assert "## Metadata" in transcript
+    assert "- model: fake-model" in transcript
+    assert "- approval_mode: never" in transcript
 
 
 def test_agent_redacts_api_key_from_plan_output_command_output_and_transcript(tmp_path: Path, capsys):

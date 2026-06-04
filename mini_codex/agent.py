@@ -84,6 +84,16 @@ class CodingAgent:
                 if self.settings.permission_profile is not None
                 else "default dangerous-command blocklist"
             )
+            transcript.metadata(
+                {
+                    "workspace": str(workspace),
+                    "model": self.settings.model,
+                    "api_mode": self.settings.api_mode,
+                    "base_url_configured": "yes" if self.settings.base_url else "no",
+                    "approval_mode": self.settings.approval_mode,
+                    "permission_profile": permission,
+                }
+            )
             transcript.activity(
                 "Prepared workspace, model, API mode, request timeout, approval mode, "
                 f"and permission profile ({self.settings.approval_mode}, {permission})."

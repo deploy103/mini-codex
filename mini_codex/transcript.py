@@ -28,6 +28,11 @@ class RunTranscript:
     def activity(self, message: str) -> None:
         self._append(f"## Activity - {_timestamp()}\n\n- {message}\n\n")
 
+    def metadata(self, items: dict[str, str]) -> None:
+        lines = ["## Metadata", ""]
+        lines.extend(f"- {key}: {value}" for key, value in items.items())
+        self._append("\n".join(lines) + "\n\n")
+
     def text(self, title: str, body: str) -> None:
         self._append(f"## {title} - {_timestamp()}\n\n{body.rstrip()}\n\n")
 
