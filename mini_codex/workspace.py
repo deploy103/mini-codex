@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -233,6 +234,8 @@ def _iter_context_files(root: Path, *, max_files: int) -> list[Path]:
             rel = path.relative_to(root)
             if _is_sensitive_path(rel):
                 continue
+            if _is_git_ignored(root, rel):
+                continue
             found.append(path)
             if len(found) >= max_files:
                 return found
@@ -272,3 +275,17 @@ def _is_sensitive_path(path: Path) -> bool:
     if "credential" in lowered or "secret" in lowered:
         return True
     return False
+
+
+def _is_git_ignored(root: Path, relative_path: Path) -> bool:
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "--quiet", "--", str(relative_path)],
+            cwd=root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0

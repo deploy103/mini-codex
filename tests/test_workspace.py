@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -114,3 +115,21 @@ def test_workspace_context_excludes_windows_venv(tmp_path: Path):
     assert ".venv-win" not in context
     assert "venv noise" not in context
     assert "app.py" in context
+
+
+def test_workspace_context_respects_gitignore(tmp_path: Path):
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (tmp_path / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    (tmp_path / "ignored.txt").write_text("ignore me\n", encoding="utf-8")
+    (tmp_path / "kept.txt").write_text("keep me\n", encoding="utf-8")
+
+    context = build_workspace_context(
+        tmp_path,
+        max_files=10,
+        max_file_bytes=10_000,
+        max_context_bytes=20_000,
+    )
+
+    assert "--- ignored.txt ---" not in context
+    assert "ignore me" not in context
+    assert "kept.txt" in context
