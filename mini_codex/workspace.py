@@ -40,6 +40,8 @@ SENSITIVE_SUFFIXES = {
     ".pfx",
 }
 
+PRIORITY_CONTEXT_FILE_NAMES = ("AGENTS.md", "CODEX.md", ".codex.md")
+
 
 @dataclass(frozen=True)
 class AppliedEdit:
@@ -226,11 +228,26 @@ def safe_workspace_path(root: Path, relative_path: str) -> Path:
 
 def _iter_context_files(root: Path, *, max_files: int) -> list[Path]:
     found: list[Path] = []
+    seen: set[Path] = set()
+    for file_name in PRIORITY_CONTEXT_FILE_NAMES:
+        path = root / file_name
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root)
+        if _is_sensitive_path(rel) or _is_git_ignored(root, rel):
+            continue
+        found.append(path)
+        seen.add(path)
+        if len(found) >= max_files:
+            return found
+
     for current, dirs, files in os.walk(root):
         current_path = Path(current)
         dirs[:] = sorted(d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".mypy_cache"))
         for file_name in sorted(files):
             path = current_path / file_name
+            if path in seen:
+                continue
             rel = path.relative_to(root)
             if _is_sensitive_path(rel):
                 continue

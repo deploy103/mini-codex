@@ -133,3 +133,19 @@ def test_workspace_context_respects_gitignore(tmp_path: Path):
     assert "--- ignored.txt ---" not in context
     assert "ignore me" not in context
     assert "kept.txt" in context
+
+
+def test_workspace_context_prioritizes_agents_instructions(tmp_path: Path):
+    (tmp_path / "aaa.py").write_text("print('first alphabetically')\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("Project instructions\n", encoding="utf-8")
+
+    context = build_workspace_context(
+        tmp_path,
+        max_files=1,
+        max_file_bytes=10_000,
+        max_context_bytes=20_000,
+    )
+
+    assert "AGENTS.md" in context
+    assert "Project instructions" in context
+    assert "aaa.py" not in context
