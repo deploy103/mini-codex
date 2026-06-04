@@ -33,6 +33,12 @@ IGNORED_FILE_NAMES = {
     ".DS_Store",
 }
 
+SENSITIVE_FILE_NAMES = {
+    "id_rsa",
+    "id_ed25519",
+    "credentials.json",
+}
+
 SENSITIVE_SUFFIXES = {
     ".pem",
     ".key",
@@ -280,7 +286,7 @@ def _line_delta(old: str, new: str) -> tuple[int, int]:
 def _is_sensitive_path(path: Path) -> bool:
     parts = set(path.parts)
     name = path.name
-    if name in IGNORED_FILE_NAMES:
+    if name in IGNORED_FILE_NAMES or name in SENSITIVE_FILE_NAMES:
         return True
     if name.startswith(".env.") or name.endswith(".secret") or name.endswith(".secrets"):
         return True

@@ -17,6 +17,11 @@ def test_safe_workspace_path_blocks_env(tmp_path: Path):
         safe_workspace_path(tmp_path, ".env")
 
 
+def test_safe_workspace_path_blocks_private_key_names(tmp_path: Path):
+    with pytest.raises(ValueError):
+        safe_workspace_path(tmp_path, "id_ed25519")
+
+
 def test_apply_edits_creates_file(tmp_path: Path):
     applied = apply_edits(
         tmp_path,
@@ -97,6 +102,22 @@ def test_workspace_context_excludes_env(tmp_path: Path):
     )
 
     assert "APIM_KEY" not in context
+    assert "app.py" in context
+
+
+def test_workspace_context_excludes_private_key_names(tmp_path: Path):
+    (tmp_path / "id_rsa").write_text("private key\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("print('ok')\n", encoding="utf-8")
+
+    context = build_workspace_context(
+        tmp_path,
+        max_files=10,
+        max_file_bytes=10_000,
+        max_context_bytes=20_000,
+    )
+
+    assert "private key" not in context
+    assert "id_rsa" not in context
     assert "app.py" in context
 
 
