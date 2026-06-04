@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mini-codex"
+version = "0.1.0"
+description = "A small Codex-like local coding agent powered by the OpenAI API."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "openai>=2.0.0",
+  "python-dotenv>=1.0.1",
+  "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+mini-codex = "mini_codex.__main__:main"
+mini-codex-gui = "mini_codex.gui:main"
+
+[tool.setuptools.packages.find]
+include = ["mini_codex*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

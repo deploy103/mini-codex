@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+show_easy_help() {
+  cat <<'EOF'
+Easy commands:
+  ./codex "task"          Run the local coding agent
+  ./codex gui             Open the desktop app window
+  ./codex config          Show resolved non-secret config
+  ./codex doctor          Check local setup
+  ./codex dry "task"      Preview the plan without writing files or running commands
+  ./codex permission list Manage shell-command permission profiles
+  ./codex test            Run pytest
+  ./codex logs            List recent run transcripts
+  ./codex last            Print the latest run transcript
+EOF
+
+  if [[ -x ".venv/bin/python" ]]; then
+    echo
+    echo "mini-codex options:"
+    ".venv/bin/python" -m mini_codex --help
+  else
+    echo
+    echo "Run ./codex config or ./codex \"task\" once to initialize the local environment."
+  fi
+}
+
+show_logs() {
+  if [[ -d ".mini_codex/runs" ]]; then
+    find .mini_codex/runs -maxdepth 1 -type f -name '*.md' -printf '%T@ %p\n' \
+      | sort -nr \
+      | awk '{print $2}' \
+      | head -20
+  else
+    echo "No run transcripts yet."
+  fi
+}
+
+show_last() {
+  if [[ ! -d ".mini_codex/runs" ]]; then
+    echo "No run transcripts yet."
+    return 1
+  fi
+  latest="$(find .mini_codex/runs -maxdepth 1 -type f -name '*.md' -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR == 1 {print $2}')"
+  if [[ -z "$latest" ]]; then
+    echo "No run transcripts yet."
+    return 1
+  fi
+  cat "$latest"
+}
+
+case "${1:-}" in
+  help|-h|--help)
+    show_easy_help
+    exit 0
+    ;;
+  logs)
+    show_logs
+    exit 0
+    ;;
+  last)
+    show_last
+    exit $?
+    ;;
+esac
+
+PYTHON_BIN="${PYTHON:-}"
+if [[ -z "$PYTHON_BIN" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+  else
+    echo "python3 or python is required." >&2
+    exit 1
+  fi
+fi
+
+if [[ ! -x ".venv/bin/python" ]]; then
+  echo "[setup] Creating .venv"
+  echo "[setup] command: $PYTHON_BIN -m venv .venv"
+  "$PYTHON_BIN" -m venv .venv
+fi
+
+VENV_PY="$ROOT/.venv/bin/python"
+READY_MARKER="$ROOT/.venv/.mini_codex_ready"
+
+ensure_pip() {
+  if ! "$VENV_PY" -m pip --version >/dev/null 2>&1; then
+    echo "[setup] Bootstrapping pip"
+    echo "[setup] command: $VENV_PY -m ensurepip --upgrade"
+    "$VENV_PY" -m ensurepip --upgrade
+  fi
+}
+
+NEEDS_SETUP=0
+if [[ ! -f "$READY_MARKER" ]]; then
+  NEEDS_SETUP=1
+elif [[ "pyproject.toml" -nt "$READY_MARKER" || "requirements.txt" -nt "$READY_MARKER" ]]; then
+  NEEDS_SETUP=1
+fi
+
+if [[ "$NEEDS_SETUP" == "1" ]]; then
+  if ! "$VENV_PY" - <<'PY' >/dev/null 2>&1
+import importlib.metadata
+import dotenv
+import openai
+import rich
+
+importlib.metadata.version("mini-codex")
+PY
+  then
+    ensure_pip
+    echo "[setup] Installing mini-codex and dependencies"
+    echo "[setup] command: $VENV_PY -m pip install -e .[dev]"
+    "$VENV_PY" -m pip install -e ".[dev]"
+  fi
+  touch "$READY_MARKER"
+fi
+
+case "${1:-}" in
+  config)
+    shift
+    set -- --show-config "$@"
+    ;;
+  doctor)
+    shift
+    set -- --doctor "$@"
+    ;;
+  dry)
+    shift
+    set -- --dry-run --no-commands "$@"
+    ;;
+  gui)
+    shift
+    set -- --gui "$@"
+    ;;
+  test)
+    shift
+    exec "$VENV_PY" -m pytest -q "$@"
+    ;;
+esac
+
+exec "$VENV_PY" -m mini_codex "$@"
