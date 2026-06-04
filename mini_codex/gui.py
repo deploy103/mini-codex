@@ -37,6 +37,8 @@ def build_agent_command(
     dry_run: bool = False,
     no_commands: bool = False,
     permission: str = "",
+    approval_mode: str = "never",
+    resume_last: bool = False,
     extra_args: Sequence[str] = (),
 ) -> list[str]:
     command = [
@@ -49,6 +51,10 @@ def build_agent_command(
     command.extend(extra_args)
     if permission.strip():
         command.extend(["--permission", permission.strip()])
+    if approval_mode.strip() and approval_mode.strip() != "never":
+        command.extend(["--approval-mode", approval_mode.strip()])
+    if resume_last:
+        command.append("--resume-last")
     if dry_run:
         command.extend(["--dry-run", "--no-commands"])
     elif no_commands:
@@ -80,7 +86,7 @@ def strip_ansi(text: str) -> str:
 
 class BrowserGuiState:
     def __init__(self, *, workspace: Path) -> None:
-        self.workspace = workspace.resolve()
+        self.workspace = resolve_existing_workspace(workspace)
         self.lock = threading.Lock()
         self.events: list[dict[str, object]] = []
         self.next_event_id = 1
@@ -105,10 +111,15 @@ class BrowserGuiState:
             }
 
     def set_workspace(self, workspace: Path) -> dict[str, object]:
+        resolved = workspace.expanduser().resolve()
+        if not resolved.exists():
+            return {"ok": False, "error": f"Workspace not found: {resolved}"}
+        if not resolved.is_dir():
+            return {"ok": False, "error": f"Workspace is not a directory: {resolved}"}
         with self.lock:
             if self._is_running_locked():
                 return {"ok": False, "error": "A run is already active."}
-            self.workspace = workspace.expanduser().resolve()
+            self.workspace = resolved
             self.config_summary = self._config_summary()
         self.add_event("system", f"Workspace changed: {self.workspace}\n")
         return {
@@ -135,7 +146,16 @@ class BrowserGuiState:
                 return {"ok": True}
         return {"ok": False, "error": "Transcript not found."}
 
-    def start_task(self, *, task: str, dry_run: bool, no_commands: bool, permission: str = "") -> dict[str, object]:
+    def start_task(
+        self,
+        *,
+        task: str,
+        dry_run: bool,
+        no_commands: bool,
+        permission: str = "",
+        approval_mode: str = "never",
+        resume_last: bool = False,
+    ) -> dict[str, object]:
         task = task.strip()
         if not task:
             return {"ok": False, "error": "Task is empty."}
@@ -146,6 +166,8 @@ class BrowserGuiState:
             dry_run=dry_run,
             no_commands=no_commands,
             permission=permission,
+            approval_mode=approval_mode,
+            resume_last=resume_last,
         )
         self.add_event("user", task + "\n")
         return self._start_process(command, title="Run")
@@ -157,6 +179,12 @@ class BrowserGuiState:
         elif name == "doctor":
             args = ["--doctor"]
             title = "Doctor"
+        elif name == "status":
+            args = ["status"]
+            title = "Status"
+        elif name == "diff":
+            args = ["diff"]
+            title = "Diff"
         else:
             return {"ok": False, "error": "Unknown utility."}
         command = build_agent_command(sys.executable, workspace=self.workspace, extra_args=args)
@@ -265,7 +293,7 @@ class MiniCodexApp:
             raise RuntimeError("tkinter is not available in this Python installation.")
 
         self.root = root
-        self.workspace = workspace.resolve()
+        self.workspace = resolve_existing_workspace(workspace)
         self.events: queue.Queue[tuple[str, str | int]] = queue.Queue()
         self.process: subprocess.Popen[str] | None = None
         self.reader: threading.Thread | None = None
@@ -279,6 +307,8 @@ class MiniCodexApp:
         self.dry_run_var = tk.BooleanVar(value=False)
         self.no_commands_var = tk.BooleanVar(value=False)
         self.permission_var = tk.StringVar(value="")
+        self.approval_mode_var = tk.StringVar(value="never")
+        self.resume_last_var = tk.BooleanVar(value=False)
 
         self._configure_root()
         self._build_layout()
@@ -428,6 +458,20 @@ class MiniCodexApp:
             command=lambda: self._start_utility(["--doctor"], "Doctor"),
         )
         self.doctor_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self.status_button = ttk.Button(
+            utility,
+            text="Status",
+            style="App.TButton",
+            command=lambda: self._start_utility(["status"], "Status"),
+        )
+        self.status_button.grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=(8, 0))
+        self.diff_button = ttk.Button(
+            utility,
+            text="Diff",
+            style="App.TButton",
+            command=lambda: self._start_utility(["diff"], "Diff"),
+        )
+        self.diff_button.grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=(8, 0))
 
         main = ttk.Frame(shell, style="App.TFrame", padding=(18, 16))
         main.grid(row=0, column=1, sticky="nsew")
@@ -510,6 +554,22 @@ class MiniCodexApp:
             state="readonly",
         )
         self.permission_combo.grid(row=0, column=3, sticky="w")
+        self.resume_last_check = ttk.Checkbutton(
+            options,
+            text="Resume last",
+            variable=self.resume_last_var,
+            style="App.TCheckbutton",
+        )
+        self.resume_last_check.grid(row=0, column=4, sticky="w", padx=(14, 0))
+        ttk.Label(options, text="Approval", style="App.TLabel").grid(row=0, column=5, sticky="w", padx=(14, 6))
+        self.approval_combo = ttk.Combobox(
+            options,
+            textvariable=self.approval_mode_var,
+            values=("never", "always"),
+            width=9,
+            state="readonly",
+        )
+        self.approval_combo.grid(row=0, column=6, sticky="w")
 
         actions = ttk.Frame(composer, style="App.TFrame")
         actions.grid(row=1, column=3, sticky="e", pady=(10, 0))
@@ -580,6 +640,8 @@ class MiniCodexApp:
             dry_run=self.dry_run_var.get(),
             no_commands=self.no_commands_var.get(),
             permission=self.permission_var.get(),
+            approval_mode=self.approval_mode_var.get(),
+            resume_last=self.resume_last_var.get(),
         )
         self._append_user_task(task)
         self._start_process(command, title="Run")
@@ -594,6 +656,12 @@ class MiniCodexApp:
             return
 
         workspace = self._current_workspace()
+        if not workspace.exists():
+            self._append_line(f"Error: Workspace not found: {workspace}\n", "error")
+            return
+        if not workspace.is_dir():
+            self._append_line(f"Error: Workspace is not a directory: {workspace}\n", "error")
+            return
         self._refresh_config_status()
         self._set_running(True)
         self.started_at = time.monotonic()
@@ -680,11 +748,15 @@ class MiniCodexApp:
         self.run_button.configure(state=disabled if running else normal)
         self.config_button.configure(state=disabled if running else normal)
         self.doctor_button.configure(state=disabled if running else normal)
+        self.status_button.configure(state=disabled if running else normal)
+        self.diff_button.configure(state=disabled if running else normal)
         self.stop_button.configure(state=normal if running else disabled)
         self.clear_button.configure(state=disabled if running else normal)
         self.dry_check.configure(state=disabled if running else normal)
         self.no_commands_check.configure(state=disabled if running else normal)
         self.permission_combo.configure(state=disabled if running else "readonly")
+        self.resume_last_check.configure(state=disabled if running else normal)
+        self.approval_combo.configure(state=disabled if running else "readonly")
 
     def _append_user_task(self, task: str) -> None:
         self.log.configure(state="normal")
@@ -761,6 +833,15 @@ def open_path(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
+def resolve_existing_workspace(workspace: Path) -> Path:
+    resolved = workspace.expanduser().resolve()
+    if not resolved.exists():
+        raise RuntimeError(f"Workspace not found: {resolved}")
+    if not resolved.is_dir():
+        raise RuntimeError(f"Workspace is not a directory: {resolved}")
+    return resolved
+
+
 def run_gui(*, workspace: Path | None = None, initial_task: str = "") -> int:
     if tk is None:
         return run_browser_gui(workspace=workspace, initial_task=initial_task)
@@ -797,6 +878,8 @@ class BrowserGuiHandler(BaseHTTPRequestHandler):
                     dry_run=bool(payload.get("dry_run")),
                     no_commands=bool(payload.get("no_commands")),
                     permission=str(payload.get("permission", "")),
+                    approval_mode=str(payload.get("approval_mode", "never")),
+                    resume_last=bool(payload.get("resume_last")),
                 )
             )
             return
@@ -1134,6 +1217,8 @@ button.danger {
       <div class="side-buttons">
         <button id="configButton">Config</button>
         <button id="doctorButton">Doctor</button>
+        <button id="statusButton">Status</button>
+        <button id="diffButton">Diff</button>
       </div>
     </div>
     <button id="quitButton">Quit</button>
@@ -1146,7 +1231,9 @@ button.danger {
         <div class="left-controls">
           <label class="check"><input type="checkbox" id="dryRun"> Dry run</label>
           <label class="check"><input type="checkbox" id="noCommands"> No commands</label>
+          <label class="check"><input type="checkbox" id="resumeLast"> Resume last</label>
           <label class="permission-control">Permission <select id="permission"></select></label>
+          <label class="permission-control">Approval <select id="approvalMode"><option value="never">never</option><option value="always">always</option></select></label>
         </div>
         <div class="right-controls">
           <button id="clearButton">Clear</button>
@@ -1172,9 +1259,13 @@ const stopButton = document.getElementById("stopButton");
 const clearButton = document.getElementById("clearButton");
 const configButton = document.getElementById("configButton");
 const doctorButton = document.getElementById("doctorButton");
+const statusButton = document.getElementById("statusButton");
+const diffButton = document.getElementById("diffButton");
 const dryRun = document.getElementById("dryRun");
 const noCommands = document.getElementById("noCommands");
+const resumeLast = document.getElementById("resumeLast");
 const permission = document.getElementById("permission");
+const approvalMode = document.getElementById("approvalMode");
 let permissionOptionsKey = "";
 
 function fmtElapsed(total) {
@@ -1196,11 +1287,15 @@ function setRunning(value) {
   runButton.disabled = value;
   configButton.disabled = value;
   doctorButton.disabled = value;
+  statusButton.disabled = value;
+  diffButton.disabled = value;
   stopButton.disabled = !value;
   clearButton.disabled = value;
   dryRun.disabled = value;
   noCommands.disabled = value;
+  resumeLast.disabled = value;
   permission.disabled = value;
+  approvalMode.disabled = value;
 }
 
 function updatePermissionProfiles(names) {
@@ -1264,7 +1359,9 @@ runButton.addEventListener("click", async () => {
     task: task.value,
     dry_run: dryRun.checked,
     no_commands: noCommands.checked,
-    permission: permission.value
+    permission: permission.value,
+    approval_mode: approvalMode.value,
+    resume_last: resumeLast.checked
   });
   if (!result.ok && result.error) appendEvent({kind: "error", text: "Error: " + result.error + "\n"});
 });
@@ -1272,6 +1369,8 @@ stopButton.addEventListener("click", () => post("/stop"));
 clearButton.addEventListener("click", () => { log.textContent = ""; });
 configButton.addEventListener("click", () => post("/utility", {name: "config"}));
 doctorButton.addEventListener("click", () => post("/utility", {name: "doctor"}));
+statusButton.addEventListener("click", () => post("/utility", {name: "status"}));
+diffButton.addEventListener("click", () => post("/utility", {name: "diff"}));
 document.getElementById("workspaceApply").addEventListener("click", async () => {
   const result = await post("/workspace", {path: workspace.value});
   if (!result.ok && result.error) appendEvent({kind: "error", text: "Error: " + result.error + "\n"});

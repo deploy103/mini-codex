@@ -41,6 +41,8 @@ PowerShell에서 실행한다면 같은 방식으로 `./codex.ps1`을 쓰면 됩
 ./codex test                # pytest 실행
 ./codex logs                # 최근 실행 기록 목록
 ./codex last                # 마지막 실행 기록 출력
+./codex status              # workspace/git/기록/권한 상태 확인
+./codex diff                # staged/unstaged 변경 요약 확인
 ```
 
 작업 중에는 다음 흐름이 화면에 표시됩니다.
@@ -169,6 +171,12 @@ VISION_MODEL=...
 
 명령어가 길면 따옴표 안에 자연어로 길게 써도 됩니다.
 
+마지막 실행 기록을 참고해서 이어가려면:
+
+```bash
+./codex --resume-last "방금 실패한 부분을 이어서 고쳐줘"
+```
+
 ## 안전하게 미리보기
 
 실제 파일을 수정하지 않고 모델이 무엇을 하려는지만 보고 싶으면:
@@ -188,6 +196,14 @@ VISION_MODEL=...
 ```bash
 ./codex --dry-run --no-commands "현재 프로젝트 문제점을 확인해줘"
 ```
+
+명령을 실행하기 전에 매번 확인받으려면 approval mode를 켭니다.
+
+```bash
+./codex --approval-mode always "테스트를 고치고 실행해줘"
+```
+
+터미널 입력을 받을 수 없는 환경에서는 명령이 실행되지 않고 skipped로 기록됩니다.
 
 ## shell 명령 권한 프로필
 
@@ -256,6 +272,18 @@ APIM_TIMEOUT=180
 ./codex last
 ```
 
+현재 workspace 상태를 API 키 없이 확인합니다.
+
+```bash
+./codex status
+```
+
+git 변경 요약만 빠르게 보려면:
+
+```bash
+./codex diff
+```
+
 이 폴더가 git 저장소라면 변경된 파일을 확인합니다.
 
 ```bash
@@ -280,6 +308,8 @@ git diff
 ./codex config
 ./codex doctor
 ./codex dry "현재 상태만 점검해줘"
+./codex status
+./codex diff
 ./codex "원하는 작업을 여기에 적기"
 ./codex test
 ```

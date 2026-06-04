@@ -16,6 +16,8 @@ Easy commands:
   ./codex test            Run pytest
   ./codex logs            List recent run transcripts
   ./codex last            Print the latest run transcript
+  ./codex status          Show workspace, git, transcript, and permission status
+  ./codex diff            Show staged and unstaged git diff stats
 EOF
 
   if [[ -x ".venv/bin/python" ]]; then
@@ -30,10 +32,15 @@ EOF
 
 show_logs() {
   if [[ -d ".mini_codex/runs" ]]; then
-    find .mini_codex/runs -maxdepth 1 -type f -name '*.md' -printf '%T@ %p\n' \
+    logs="$(find .mini_codex/runs -maxdepth 1 -type f -name '*.md' -printf '%T@ %p\n' \
       | sort -nr \
       | awk '{print $2}' \
-      | head -20
+      | head -20)"
+    if [[ -n "$logs" ]]; then
+      printf '%s\n' "$logs"
+    else
+      echo "No run transcripts yet."
+    fi
   else
     echo "No run transcripts yet."
   fi
@@ -58,12 +65,16 @@ case "${1:-}" in
     exit 0
     ;;
   logs)
-    show_logs
-    exit 0
+    if [[ "$#" -eq 1 ]]; then
+      show_logs
+      exit 0
+    fi
     ;;
   last)
-    show_last
-    exit $?
+    if [[ "$#" -eq 1 ]]; then
+      show_last
+      exit $?
+    fi
     ;;
 esac
 

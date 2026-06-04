@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from dataclasses import replace
@@ -39,6 +40,8 @@ class AgentSettings:
     transcript: bool = True
     command_output_limit: int = 4_000
     permission_profile: PermissionProfile | None = None
+    approval_mode: str = "never"
+    initial_observations: tuple[str, ...] = ()
 
 
 class CodingAgent:
@@ -59,7 +62,7 @@ class CodingAgent:
     def run(self, task: str) -> AgentResult:
         workspace = self.settings.workspace.resolve()
         started = time.monotonic()
-        observations: list[str] = []
+        observations: list[str] = list(self.settings.initial_observations)
         ok = False
         transcript = self._start_transcript(workspace, task)
 
@@ -68,6 +71,9 @@ class CodingAgent:
         self.console.info(f"Model: {self.settings.model}")
         self.console.info(f"API mode: {self.settings.api_mode}")
         self.console.info(f"Request timeout: {self.settings.request_timeout:g}s")
+        self.console.info(f"Approval mode: {self.settings.approval_mode}")
+        if self.settings.initial_observations:
+            self.console.info(f"Resumed observations: {len(self.settings.initial_observations)}")
         if self.settings.permission_profile is not None:
             self.console.info(f"Permission profile: {self.settings.permission_profile.name}")
         if transcript is not None:
@@ -78,8 +84,8 @@ class CodingAgent:
                 else "default dangerous-command blocklist"
             )
             transcript.activity(
-                "Prepared workspace, model, API mode, request timeout, and permission profile "
-                f"({permission})."
+                "Prepared workspace, model, API mode, request timeout, approval mode, "
+                f"and permission profile ({self.settings.approval_mode}, {permission})."
             )
         if self.settings.dry_run:
             self.console.warn("Dry-run mode: no files will be written and no commands will run.")
@@ -334,16 +340,43 @@ class CodingAgent:
             self.console.command(display_cmd, why=display_why, timeout=command.timeout)
             if transcript is not None:
                 transcript.command(cmd=display_cmd, why=display_why, timeout=command.timeout)
+            approval_denial = self._command_approval_denial(display_cmd, display_why)
+            if approval_denial is not None:
+                result = CommandResult(
+                    cmd=display_cmd,
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                    skipped=True,
+                    blocked_reason=approval_denial,
+                )
+                self.console.command_result(
+                    returncode=result.returncode,
+                    skipped=True,
+                    blocked_reason=approval_denial,
+                    duration_seconds=0.0,
+                    output_limit=self.settings.command_output_limit,
+                )
+                if transcript is not None:
+                    transcript.command_result(result)
+                results.append(result)
+                continue
             streamed_output = False
+            streamed_counts = {"stdout": 0, "stderr": 0}
+            streamed_truncated: set[str] = set()
 
             def output_callback(stream_name: str, text: str) -> None:
                 nonlocal streamed_output
                 streamed_output = True
-                self.console.command_output(
-                    stream_name,
+                output = _limit_streamed_output(
                     self._redact_text(text),
-                    output_limit=self.settings.command_output_limit,
+                    stream_name=stream_name,
+                    counts=streamed_counts,
+                    truncated=streamed_truncated,
+                    limit=self.settings.command_output_limit,
                 )
+                if output:
+                    self.console.command_output(stream_name, output, output_limit=len(output))
 
             result = self._redact_command_result(
                 run_shell_command(
@@ -367,6 +400,25 @@ class CodingAgent:
             results.append(result)
         self._show_command_summary(results, transcript=transcript)
         return results
+
+    def _command_approval_denial(self, cmd: str, why: str) -> str | None:
+        if self.settings.approval_mode == "never":
+            return None
+        if self.settings.approval_mode != "always":
+            return f"Unknown approval mode: {self.settings.approval_mode}"
+        if not sys.stdin.isatty():
+            return "Approval required but stdin is not interactive."
+
+        self.console.warn("Approval required before running this shell command.")
+        if why:
+            self.console.info(f"why: {why}")
+        try:
+            answer = input("Run command? [y/N] ")
+        except EOFError:
+            return "Command denied because no approval input was available."
+        if answer.strip().lower() in {"y", "yes"}:
+            return None
+        return "Command denied by user."
 
     def _finish(
         self,
@@ -478,3 +530,27 @@ def _count_context_files(context: str) -> int:
             return 0
         count += 1
     return count
+
+
+def _limit_streamed_output(
+    text: str,
+    *,
+    stream_name: str,
+    counts: dict[str, int],
+    truncated: set[str],
+    limit: int,
+) -> str:
+    if limit <= 0:
+        return ""
+    used = counts.get(stream_name, 0)
+    remaining = limit - used
+    if remaining <= 0:
+        if stream_name in truncated:
+            return ""
+        truncated.add(stream_name)
+        return "... output truncated ...\n"
+    counts[stream_name] = used + min(len(text), remaining)
+    if len(text) <= remaining:
+        return text
+    truncated.add(stream_name)
+    return text[:remaining] + "\n... output truncated ...\n"

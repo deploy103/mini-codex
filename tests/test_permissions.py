@@ -39,6 +39,11 @@ def test_create_permission_profile_rejects_builtin_name():
         create_permission_profile("Trusted")
 
 
+def test_save_permission_profile_rejects_builtin_name(tmp_path: Path):
+    with pytest.raises(ValueError):
+        save_permission_profile(tmp_path, PermissionProfile(name="readonly"))
+
+
 def test_permission_denial_reason_enforces_allow_patterns():
     profile = PermissionProfile(name="custom", allow_patterns=(r"^pytest\b",))
 

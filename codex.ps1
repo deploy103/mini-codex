@@ -19,6 +19,8 @@ Easy commands:
   ./codex.ps1 test            Run pytest
   ./codex.ps1 logs            List recent run transcripts
   ./codex.ps1 last            Print the latest run transcript
+  ./codex.ps1 status          Show workspace, git, transcript, and permission status
+  ./codex.ps1 diff            Show staged and unstaged git diff stats
 "@ | Write-Host
 
     $localVenvPy = Join-Path $Root ".venv-win\Scripts\python.exe"
@@ -35,7 +37,12 @@ Easy commands:
 function Show-Logs {
     $runDir = Join-Path $Root ".mini_codex\runs"
     if (Test-Path $runDir) {
-        Get-ChildItem $runDir -Filter "*.md" | Sort-Object LastWriteTime -Descending | Select-Object -First 20 -ExpandProperty FullName
+        $items = Get-ChildItem $runDir -Filter "*.md" | Sort-Object LastWriteTime -Descending | Select-Object -First 20
+        if ($items) {
+            $items | Select-Object -ExpandProperty FullName
+        } else {
+            Write-Host "No run transcripts yet."
+        }
     } else {
         Write-Host "No run transcripts yet."
     }
@@ -66,12 +73,16 @@ switch ($first) {
         exit 0
     }
     "logs" {
-        Show-Logs
-        exit 0
+        if ($rest.Count -eq 0) {
+            Show-Logs
+            exit 0
+        }
     }
     "last" {
-        $code = Show-Last
-        exit $code
+        if ($rest.Count -eq 0) {
+            $code = Show-Last
+            exit $code
+        }
     }
 }
 

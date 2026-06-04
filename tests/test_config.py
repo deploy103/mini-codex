@@ -59,6 +59,29 @@ def test_openai_native_env_names_win(tmp_path: Path, monkeypatch):
     assert config.api_mode == "chat"
 
 
+def test_empty_dotenv_values_do_not_mask_shell_environment(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("APIM_KEY", "shell-key")
+    monkeypatch.setenv("APIM_BASE_URL", "https://gateway.example.test")
+    monkeypatch.setenv("CHAT_MODEL", "shell-model")
+
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "APIM_KEY=",
+                "APIM_BASE_URL=",
+                "CHAT_MODEL=",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(tmp_path)
+
+    assert config.api_key == "shell-key"
+    assert config.base_url == "https://gateway.example.test/shell-model/"
+    assert config.model == "shell-model"
+
+
 def test_load_config_does_not_leak_previous_dotenv_values(tmp_path: Path, monkeypatch):
     for name in (
         "OPENAI_API_KEY",

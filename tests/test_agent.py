@@ -40,6 +40,42 @@ class SecretEchoLLM:
         )
 
 
+class StreamingOutputLLM:
+    def create_plan(self, user_prompt: str) -> str:
+        cmd = (
+            f"{shlex.quote(sys.executable)} -u -c "
+            "\"print('12345678'); print('abcdefgh')\""
+        )
+        return json.dumps(
+            {
+                "summary": "stream output",
+                "steps": [{"title": "run stream", "detail": "emit multiple chunks"}],
+                "edits": [],
+                "commands": [{"cmd": cmd, "why": "verify stream limit", "timeout": 30}],
+                "done": True,
+                "notes": [],
+            }
+        )
+
+
+class PromptCaptureLLM:
+    def __init__(self) -> None:
+        self.prompt = ""
+
+    def create_plan(self, user_prompt: str) -> str:
+        self.prompt = user_prompt
+        return json.dumps(
+            {
+                "summary": "done",
+                "steps": [],
+                "edits": [],
+                "commands": [],
+                "done": True,
+                "notes": [],
+            }
+        )
+
+
 def test_agent_prints_activity_command_and_result_for_dry_run(tmp_path: Path, capsys):
     agent = CodingAgent.__new__(CodingAgent)
     agent.settings = AgentSettings(
@@ -68,6 +104,28 @@ def test_agent_prints_activity_command_and_result_for_dry_run(tmp_path: Path, ca
     assert "$ python -c" in captured.out
     assert "skipped" in captured.out
     assert "0 passed, 0 failed, 1 skipped" in captured.out
+
+
+def test_agent_limits_streaming_output_per_stream(tmp_path: Path, capsys):
+    agent = CodingAgent.__new__(CodingAgent)
+    agent.settings = AgentSettings(
+        workspace=tmp_path,
+        model="fake-model",
+        api_key="fake-key",
+        base_url=None,
+        api_key_header=None,
+        command_output_limit=10,
+    )
+    agent.console = Console()
+    agent.llm = StreamingOutputLLM()
+
+    result = agent.run("stream output")
+
+    captured = capsys.readouterr()
+    assert result.ok is True
+    assert "stdout: 12345678" in captured.out
+    assert "stdout: abcdefgh" not in captured.out
+    assert "... output truncated ..." in captured.out
     assert "Elapsed:" in captured.out
     assert "Transcript saved:" in captured.out
     assert not (tmp_path / "demo.txt").exists()
@@ -120,3 +178,46 @@ def test_agent_treats_permission_blocked_commands_as_skipped(tmp_path: Path, cap
     assert "Permission profile: readonly" in captured.out
     assert "skipped" in captured.out
     assert "0 passed, 0 failed, 1 skipped" in captured.out
+
+
+def test_agent_approval_mode_skips_commands_without_interactive_stdin(tmp_path: Path, capsys):
+    agent = CodingAgent.__new__(CodingAgent)
+    agent.settings = AgentSettings(
+        workspace=tmp_path,
+        model="fake-model",
+        api_key="fake-key",
+        base_url=None,
+        api_key_header=None,
+        approval_mode="always",
+    )
+    agent.console = Console()
+    agent.llm = FakeLLM()
+
+    result = agent.run("make a demo")
+
+    captured = capsys.readouterr()
+    assert result.ok is True
+    assert "Approval mode: always" in captured.out
+    assert "Approval required but stdin is not interactive" in captured.out
+    assert "0 passed, 0 failed, 1 skipped" in captured.out
+
+
+def test_agent_includes_initial_observations_in_prompt(tmp_path: Path):
+    agent = CodingAgent.__new__(CodingAgent)
+    agent.settings = AgentSettings(
+        workspace=tmp_path,
+        model="fake-model",
+        api_key="fake-key",
+        base_url=None,
+        api_key_header=None,
+        initial_observations=("Previous run transcript:\nold failure",),
+    )
+    agent.console = Console()
+    llm = PromptCaptureLLM()
+    agent.llm = llm
+
+    result = agent.run("continue")
+
+    assert result.ok is True
+    assert "Previous run transcript:" in llm.prompt
+    assert "old failure" in llm.prompt

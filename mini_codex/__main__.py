@@ -20,10 +20,13 @@ from .permissions import (
     permission_profile_to_json,
     save_permission_profile,
 )
+from .preflight import inspect_git_state
 
 
 PERMISSION_COMMAND_NAMES = {"permission", "permissions", "permision", "permisions"}
-LOCAL_COMMAND_NAMES = {"config", "doctor", "dry", "gui", "test", "logs", "last"}
+LOCAL_COMMAND_NAMES = {"config", "doctor", "dry", "gui", "test", "logs", "last", "status", "diff"}
+APPROVAL_MODES = {"always", "never"}
+RESUME_TRANSCRIPT_LIMIT = 20_000
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="mini-codex",
         description="Run a small OpenAI-powered local coding agent.",
         epilog=(
-            "Local commands: config, doctor, dry, gui, test, logs, last, "
+            "Local commands: config, doctor, dry, gui, test, logs, last, status, diff, "
             "permission list/show/new/delete. Slash forms such as /permission/new are also supported."
         ),
     )
@@ -48,7 +51,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Show proposed work without writing files or running commands.")
     parser.add_argument("--no-commands", action="store_true", help="Apply file edits but do not run shell commands.")
     parser.add_argument("--permission", help="Permission profile to apply to model-proposed shell commands.")
+    parser.add_argument(
+        "--approval-mode",
+        choices=sorted(APPROVAL_MODES),
+        default="never",
+        help="Ask before running shell commands. Defaults to never.",
+    )
     parser.add_argument("--print-prompt", action="store_true", help="Print the prompt sent to the model.")
+    parser.add_argument("--resume-last", action="store_true", help="Include the latest run transcript as context.")
     parser.add_argument("--no-transcript", action="store_true", help="Do not write a run transcript under .mini_codex/runs.")
     parser.add_argument("--command-output-limit", type=int, default=4_000, help="Maximum stdout/stderr characters shown per stream.")
     parser.add_argument("--gui", action="store_true", help="Open the desktop app window.")
@@ -59,6 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_task(task: str, args: argparse.Namespace, console: Console) -> int:
     workspace = Path(args.workspace)
+    if not workspace.exists():
+        raise RuntimeError(f"Workspace not found: {workspace}")
+    if not workspace.is_dir():
+        raise RuntimeError(f"Workspace is not a directory: {workspace}")
     config = load_config(workspace)
     model = args.model or config.model
     base_url = resolve_base_url_for_model(config.base_url, old_model=config.model, new_model=model)
@@ -66,6 +80,9 @@ def run_task(task: str, args: argparse.Namespace, console: Console) -> int:
     request_timeout = args.request_timeout if args.request_timeout is not None else config.request_timeout
     if request_timeout <= 0:
         raise RuntimeError("--request-timeout must be greater than zero.")
+    approval_mode = getattr(args, "approval_mode", "never")
+    if approval_mode not in APPROVAL_MODES:
+        raise RuntimeError("--approval-mode must be one of: always, never.")
     permission_profile = _load_selected_permission_profile(workspace, args.permission)
 
     if args.show_config:
@@ -75,10 +92,13 @@ def run_task(task: str, args: argparse.Namespace, console: Console) -> int:
             base_url=base_url,
             api_mode=api_mode,
             request_timeout=request_timeout,
+            approval_mode=approval_mode,
             permission_profile=permission_profile,
             console=console,
         )
         return 0
+
+    initial_observations = _resume_observations(workspace, console) if getattr(args, "resume_last", False) else ()
 
     settings = AgentSettings(
         workspace=workspace,
@@ -100,6 +120,8 @@ def run_task(task: str, args: argparse.Namespace, console: Console) -> int:
         transcript=not args.no_transcript,
         command_output_limit=args.command_output_limit,
         permission_profile=permission_profile,
+        approval_mode=approval_mode,
+        initial_observations=initial_observations,
     )
     agent = CodingAgent(settings, console=console)
     result = agent.run(task)
@@ -125,6 +147,7 @@ def print_resolved_config(
     request_timeout: float,
     permission_profile: PermissionProfile | None,
     console: Console,
+    approval_mode: str = "never",
 ) -> None:
     console.info(f"Model: {model}")
     console.info(f"API mode: {api_mode}")
@@ -132,6 +155,7 @@ def print_resolved_config(
     console.info(f"Auth header: {config.api_key_header or 'Authorization'}")
     console.info(f"Azure API version: {config.azure_api_version}")
     console.info(f"Request timeout: {request_timeout:g}s")
+    console.info(f"Approval mode: {approval_mode}")
     permission = permission_profile.name if permission_profile is not None else "default dangerous-command blocklist"
     console.info(f"Permission profile: {permission}")
 
@@ -141,8 +165,14 @@ def run_doctor(args: argparse.Namespace, console: Console) -> int:
     ok = True
 
     console.rule("Doctor")
-    ok &= _doctor_check(console, workspace.exists(), "Workspace", str(workspace))
-    ok &= _doctor_check(console, workspace.is_dir(), "Workspace type", "directory")
+    if not workspace.exists():
+        console.error(f"Workspace not found: {workspace}")
+        return 1
+    console.info(f"[ok] Workspace: {workspace}")
+    if not workspace.is_dir():
+        console.error(f"Workspace is not a directory: {workspace}")
+        return 1
+    console.info("[ok] Workspace type: directory")
 
     env_path = workspace / ".env"
     if env_path.exists():
@@ -166,6 +196,7 @@ def run_doctor(args: argparse.Namespace, console: Console) -> int:
     base_url = resolve_base_url_for_model(config.base_url, old_model=config.model, new_model=model)
     api_mode = validate_api_mode(args.api_mode or config.api_mode)
     request_timeout = args.request_timeout if args.request_timeout is not None else config.request_timeout
+    approval_mode = getattr(args, "approval_mode", "never")
     try:
         permission_profile = _load_selected_permission_profile(workspace, args.permission)
     except Exception as exc:
@@ -180,6 +211,7 @@ def run_doctor(args: argparse.Namespace, console: Console) -> int:
         request_timeout=request_timeout,
         permission_profile=permission_profile,
         console=console,
+        approval_mode=approval_mode,
     )
     return 0 if ok else 1
 
@@ -209,6 +241,12 @@ def run_permission_command(workspace: Path, words: list[str], console: Console) 
 
 
 def run_logs_command(workspace: Path, console: Console, *, limit: int = 20) -> int:
+    if not workspace.exists():
+        console.error(f"Workspace not found: {workspace}")
+        return 1
+    if not workspace.is_dir():
+        console.error(f"Workspace is not a directory: {workspace}")
+        return 1
     paths = list_recent_transcripts(workspace, limit=limit)
     if not paths:
         console.info("No run transcripts yet.")
@@ -219,6 +257,12 @@ def run_logs_command(workspace: Path, console: Console, *, limit: int = 20) -> i
 
 
 def run_last_command(workspace: Path, console: Console) -> int:
+    if not workspace.exists():
+        console.error(f"Workspace not found: {workspace}")
+        return 1
+    if not workspace.is_dir():
+        console.error(f"Workspace is not a directory: {workspace}")
+        return 1
     paths = list_recent_transcripts(workspace, limit=1)
     if not paths:
         console.info("No run transcripts yet.")
@@ -231,7 +275,82 @@ def run_last_command(workspace: Path, console: Console) -> int:
     return 0
 
 
+def run_status_command(workspace: Path, console: Console) -> int:
+    workspace = workspace.resolve()
+    console.rule("Status")
+    console.info(f"Workspace: {workspace}")
+    if not workspace.exists():
+        console.error(f"Workspace not found: {workspace}")
+        return 1
+    if not workspace.is_dir():
+        console.error(f"Workspace is not a directory: {workspace}")
+        return 1
+
+    try:
+        git_state = inspect_git_state(workspace)
+    except (OSError, subprocess.SubprocessError) as exc:
+        console.warn(f"Git status unavailable: {exc}")
+    else:
+        console.info(f"Git: {'repository' if git_state.is_repo else 'not a repository'}")
+        for line in git_state.output.splitlines() or ["clean"]:
+            console.plan_item(line)
+
+    recent = list_recent_transcripts(workspace, limit=1)
+    console.info(f"Latest transcript: {recent[0] if recent else 'none'}")
+    profiles = ", ".join(profile.name for profile in list_permission_profiles(workspace))
+    console.info(f"Permission profiles: {profiles or 'none'}")
+    return 0
+
+
+def run_diff_command(workspace: Path, console: Console) -> int:
+    workspace = workspace.resolve()
+    if not workspace.exists():
+        console.error(f"Workspace not found: {workspace}")
+        return 1
+    if not workspace.is_dir():
+        console.error(f"Workspace is not a directory: {workspace}")
+        return 1
+
+    console.rule("Diff")
+    try:
+        git_state = inspect_git_state(workspace)
+    except (OSError, subprocess.SubprocessError) as exc:
+        console.error(f"Git status unavailable: {exc}")
+        return 1
+    if not git_state.is_repo:
+        console.error("Workspace is not a git repository.")
+        return 1
+
+    code = 0
+    for title, command in (
+        ("Staged changes", ["git", "diff", "--cached", "--stat"]),
+        ("Unstaged changes", ["git", "diff", "--stat"]),
+    ):
+        completed = subprocess.run(
+            command,
+            cwd=workspace,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+        )
+        if completed.returncode != 0:
+            console.error((completed.stderr or completed.stdout or "git diff failed").strip())
+            code = completed.returncode
+            continue
+        console.info(f"{title}:")
+        output = completed.stdout.strip()
+        console.info(output if output else "none")
+    return code
+
+
 def run_test_command(workspace: Path, extra_args: list[str], console: Console) -> int:
+    if not workspace.exists():
+        console.error(f"Workspace not found: {workspace}")
+        return 1
+    if not workspace.is_dir():
+        console.error(f"Workspace is not a directory: {workspace}")
+        return 1
     command = build_test_command(sys.executable, extra_args)
     console.command(" ".join(shlex.quote(part) for part in command), why="run pytest", timeout=None)
     completed = subprocess.run(
@@ -255,6 +374,26 @@ def list_recent_transcripts(workspace: Path, *, limit: int = 20) -> list[Path]:
         return []
     paths = [path for path in run_dir.glob("*.md") if path.is_file()]
     return sorted(paths, key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
+
+
+def _resume_observations(workspace: Path, console: Console) -> tuple[str, ...]:
+    paths = list_recent_transcripts(workspace, limit=1)
+    if not paths:
+        console.warn("--resume-last requested, but no previous transcript was found.")
+        return ()
+    path = paths[0]
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.warn(f"--resume-last requested, but the latest transcript could not be read: {exc}")
+        return ()
+    if len(text) > RESUME_TRANSCRIPT_LIMIT:
+        text = text[-RESUME_TRANSCRIPT_LIMIT:]
+        prefix = f"Previous run transcript ({path.name}, last {RESUME_TRANSCRIPT_LIMIT:,} characters):"
+    else:
+        prefix = f"Previous run transcript ({path.name}):"
+    console.info(f"Resuming from transcript: {path}")
+    return (f"{prefix}\n{text}",)
 
 
 def build_permission_parser() -> argparse.ArgumentParser:
@@ -338,14 +477,6 @@ def _load_selected_permission_profile(workspace: Path, name: str | None) -> Perm
     return load_permission_profile(workspace, name)
 
 
-def _doctor_check(console: Console, passed: bool, name: str, detail: str) -> bool:
-    if passed:
-        console.info(f"[ok] {name}: {detail}")
-        return True
-    console.error(f"{name}: {detail}")
-    return False
-
-
 def main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else list(argv)
     local_command = _extract_local_command(raw_argv)
@@ -356,6 +487,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_logs_command(Path(workspace), console)
         if kind == "last":
             return run_last_command(Path(workspace), console)
+        if kind == "status":
+            return run_status_command(Path(workspace), console)
+        if kind == "diff":
+            return run_diff_command(Path(workspace), console)
         if kind == "test":
             return run_test_command(Path(workspace), words, console)
         raw_argv = words
@@ -436,6 +571,10 @@ def main(argv: list[str] | None = None) -> int:
                         code = run_logs_command(Path(workspace), console)
                     elif kind == "last":
                         code = run_last_command(Path(workspace), console)
+                    elif kind == "status":
+                        code = run_status_command(Path(workspace), console)
+                    elif kind == "diff":
+                        code = run_diff_command(Path(workspace), console)
                     elif kind == "test":
                         code = run_test_command(Path(workspace), words, console)
                     else:

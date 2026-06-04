@@ -102,6 +102,8 @@ def save_permission_profile(workspace: Path, profile: PermissionProfile, *, forc
     validate_permission_profile(profile)
     if profile.builtin:
         raise ValueError("Built-in permission profiles cannot be saved.")
+    if profile.name.lower() in BUILTIN_TEMPLATE_NAMES:
+        raise ValueError(f"{profile.name!r} is reserved for a built-in permission profile.")
     path = permission_profile_path(workspace, profile.name)
     if path.exists() and not force:
         raise FileExistsError(f"Permission profile already exists: {profile.name}")

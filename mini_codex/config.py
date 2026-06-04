@@ -81,7 +81,7 @@ def _dotenv_file_values(env_path: Path) -> dict[str, str]:
 
 
 def _env(name: str, file_env: dict[str, str]) -> str | None:
-    if name in file_env:
+    if name in file_env and file_env[name].strip():
         return file_env[name]
     return os.getenv(name)
 
