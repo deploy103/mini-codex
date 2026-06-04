@@ -158,6 +158,30 @@ def test_agent_redacts_api_key_from_plan_output_command_output_and_transcript(tm
     assert "[redacted]" in transcript
 
 
+def test_agent_redacts_additional_secret_values(tmp_path: Path, capsys):
+    secret = "secondary-secret-123"
+    agent = CodingAgent.__new__(CodingAgent)
+    agent.settings = AgentSettings(
+        workspace=tmp_path,
+        model="fake-model",
+        api_key="fake-key",
+        base_url=None,
+        api_key_header=None,
+        redaction_values=(secret,),
+    )
+    agent.console = Console()
+    agent.llm = SecretEchoLLM(secret)
+
+    result = agent.run("check redaction")
+
+    captured = capsys.readouterr()
+    transcript = next((tmp_path / ".mini_codex" / "runs").glob("*.md")).read_text(encoding="utf-8")
+    assert result.ok is True
+    assert secret not in captured.out
+    assert secret not in transcript
+    assert "[redacted]" in captured.out
+
+
 def test_agent_treats_permission_blocked_commands_as_skipped(tmp_path: Path, capsys):
     agent = CodingAgent.__new__(CodingAgent)
     agent.settings = AgentSettings(

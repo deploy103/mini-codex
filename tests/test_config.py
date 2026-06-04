@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from mini_codex.config import DEFAULT_REQUEST_TIMEOUT, load_config
+from mini_codex.config import DEFAULT_REQUEST_TIMEOUT, load_config, load_redaction_values
 
 
 def test_load_config_supports_apim_env_names(tmp_path: Path, monkeypatch):
@@ -80,6 +80,27 @@ def test_empty_dotenv_values_do_not_mask_shell_environment(tmp_path: Path, monke
     assert config.api_key == "shell-key"
     assert config.base_url == "https://gateway.example.test/shell-model/"
     assert config.model == "shell-model"
+
+
+def test_load_redaction_values_collects_secret_env_values(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CUSTOM_PASSWORD", "shell-password")
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "APIM_KEY=file-secret",
+                "GITHUB_TOKEN=github-secret",
+                "NORMAL_VALUE=public",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    values = load_redaction_values(tmp_path)
+
+    assert "file-secret" in values
+    assert "github-secret" in values
+    assert "shell-password" in values
+    assert "public" not in values
 
 
 def test_load_config_does_not_leak_previous_dotenv_values(tmp_path: Path, monkeypatch):

@@ -14,6 +14,7 @@ DEFAULT_MODEL = "gpt-5-codex"
 DEFAULT_AZURE_API_VERSION = "2024-10-21"
 DEFAULT_REQUEST_TIMEOUT = 180.0
 ALLOWED_API_MODES = {"auto", "responses", "chat", "foundry_models", "azure_v1", "azure_chat"}
+SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,16 @@ def load_config(workspace: Path) -> Config:
     )
 
 
+def load_redaction_values(workspace: Path) -> tuple[str, ...]:
+    file_env = _dotenv_file_values(workspace / ".env")
+    values = set()
+    for source in (file_env, os.environ):
+        for name, value in source.items():
+            if _looks_secret_env_name(name) and isinstance(value, str) and len(value.strip()) >= 4:
+                values.add(value.strip())
+    return tuple(sorted(values, key=len, reverse=True))
+
+
 def _dotenv_file_values(env_path: Path) -> dict[str, str]:
     if dotenv_values is None or not env_path.exists():
         return {}
@@ -84,6 +95,11 @@ def _env(name: str, file_env: dict[str, str]) -> str | None:
     if name in file_env and file_env[name].strip():
         return file_env[name]
     return os.getenv(name)
+
+
+def _looks_secret_env_name(name: str) -> bool:
+    upper = name.upper()
+    return any(marker in upper for marker in SECRET_ENV_MARKERS)
 
 
 def _apim_model_base_url(apim_base_url: str | None, model: str) -> str | None:

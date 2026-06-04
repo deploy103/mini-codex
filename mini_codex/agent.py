@@ -42,6 +42,7 @@ class AgentSettings:
     permission_profile: PermissionProfile | None = None
     approval_mode: str = "never"
     initial_observations: tuple[str, ...] = ()
+    redaction_values: tuple[str, ...] = ()
 
 
 class CodingAgent:
@@ -490,7 +491,7 @@ class CodingAgent:
     def _redaction_values(self) -> list[str]:
         secrets = {
             value.strip()
-            for value in (self.settings.api_key,)
+            for value in (self.settings.api_key, *self.settings.redaction_values)
             if isinstance(value, str) and len(value.strip()) >= 4
         }
         return sorted(secrets, key=len, reverse=True)

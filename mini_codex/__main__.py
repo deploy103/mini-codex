@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .agent import AgentSettings, CodingAgent
-from .config import ALLOWED_API_MODES, load_config, validate_api_mode
+from .config import ALLOWED_API_MODES, load_config, load_redaction_values, validate_api_mode
 from .console import Console
 from .permissions import (
     BUILTIN_TEMPLATE_NAMES,
@@ -122,6 +122,7 @@ def run_task(task: str, args: argparse.Namespace, console: Console) -> int:
         permission_profile=permission_profile,
         approval_mode=approval_mode,
         initial_observations=initial_observations,
+        redaction_values=load_redaction_values(workspace),
     )
     agent = CodingAgent(settings, console=console)
     result = agent.run(task)
