@@ -57,3 +57,12 @@ def test_run_shell_command_blocks_rm_force_recursive_flag_order(tmp_path: Path):
         assert result.returncode == 126
         assert result.skipped is True
         assert "dangerous command pattern" in (result.blocked_reason or "")
+
+
+def test_run_shell_command_blocks_sensitive_file_output(tmp_path: Path):
+    for cmd in ("cat .env", "tail -n 5 id_rsa", "Get-Content credentials.json"):
+        result = run_shell_command(tmp_path, ShellCommand(cmd=cmd, timeout=30))
+
+        assert result.returncode == 126
+        assert result.skipped is True
+        assert "dangerous command pattern" in (result.blocked_reason or "")

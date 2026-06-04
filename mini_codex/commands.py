@@ -24,6 +24,8 @@ DANGEROUS_PATTERNS = [
     r"\bdiskpart\b",
     r"Remove-Item\s+.*-Recurse\s+.*-Force",
     r":\(\)\s*\{\s*:\|:",
+    r"\b(?:cat|less|more|head|tail|type)\b[^\n;|&]*(?:\.env\b|id_rsa\b|id_ed25519\b|credentials\.json\b)",
+    r"\bGet-Content\b[^\n;|&]*(?:\.env\b|id_rsa\b|id_ed25519\b|credentials\.json\b)",
 ]
 
 
