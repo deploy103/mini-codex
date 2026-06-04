@@ -183,7 +183,10 @@ def run_doctor(args: argparse.Namespace, console: Console) -> int:
     else:
         console.warn(".env: not found; shell environment variables may still work")
     if _workspace_is_git_repo(workspace):
-        if _git_check_ignore(workspace, ".env"):
+        if _git_path_is_tracked(workspace, ".env"):
+            console.error(".env git tracked: .env is tracked by git")
+            ok = False
+        elif _git_check_ignore(workspace, ".env"):
             console.info("[ok] .env git ignore: .env is ignored")
         else:
             console.error(".env git ignore: .env is not ignored")
@@ -420,6 +423,17 @@ def _workspace_is_git_repo(workspace: Path) -> bool:
 def _git_check_ignore(workspace: Path, relative_path: str) -> bool:
     completed = subprocess.run(
         ["git", "check-ignore", "--quiet", "--", relative_path],
+        cwd=workspace,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=15,
+    )
+    return completed.returncode == 0
+
+
+def _git_path_is_tracked(workspace: Path, relative_path: str) -> bool:
+    completed = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", relative_path],
         cwd=workspace,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
