@@ -57,6 +57,7 @@ Rules:
 - Use only relative paths inside the workspace.
 - Never request absolute paths, path traversal, or edits to .env, secrets, credentials, or private key files.
 - Keep changes scoped to the user's task.
+- If project instruction files such as AGENTS.md appear in context, follow them unless they conflict with these rules.
 - For create/update edits, provide the complete final file content.
 - For patch edits, provide a unified diff for exactly the target file in content.
 - For delete edits, set content to null.

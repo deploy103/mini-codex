@@ -1,3 +1,4 @@
+import io
 import json
 import shlex
 import sys
@@ -224,6 +225,33 @@ def test_agent_approval_mode_skips_commands_without_interactive_stdin(tmp_path: 
     assert "Approval mode: always" in captured.out
     assert "Approval required but stdin is not interactive" in captured.out
     assert "0 passed, 0 failed, 1 skipped" in captured.out
+
+
+def test_agent_approval_mode_runs_command_after_yes(tmp_path: Path, monkeypatch, capsys):
+    class TtyInput(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    agent = CodingAgent.__new__(CodingAgent)
+    agent.settings = AgentSettings(
+        workspace=tmp_path,
+        model="fake-model",
+        api_key="fake-key",
+        base_url=None,
+        api_key_header=None,
+        approval_mode="always",
+    )
+    agent.console = Console()
+    agent.llm = StreamingOutputLLM()
+    monkeypatch.setattr(sys, "stdin", TtyInput("y\n"))
+
+    result = agent.run("stream output")
+
+    captured = capsys.readouterr()
+    assert result.ok is True
+    assert "Approval required before running this shell command" in captured.out
+    assert "stdout: 12345678" in captured.out
+    assert "1 passed, 0 failed, 0 skipped" in captured.out
 
 
 def test_agent_includes_initial_observations_in_prompt(tmp_path: Path):
