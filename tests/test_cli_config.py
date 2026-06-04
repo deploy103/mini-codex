@@ -120,6 +120,7 @@ def test_main_status_alias_does_not_require_api_key(tmp_path: Path, monkeypatch,
 
     captured = capsys.readouterr()
     assert code == 0
+    assert "Version: 0.1.0" in captured.out
     assert "Workspace:" in captured.out
     assert "Latest transcript: none" in captured.out
     assert "Permission profiles:" in captured.out

@@ -290,6 +290,7 @@ def run_last_command(workspace: Path, console: Console) -> int:
 def run_status_command(workspace: Path, console: Console) -> int:
     workspace = workspace.resolve()
     console.rule("Status")
+    console.info(f"Version: {__version__}")
     console.info(f"Workspace: {workspace}")
     if not workspace.exists():
         console.error(f"Workspace not found: {workspace}")
