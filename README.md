@@ -1,5 +1,7 @@
 # mini-codex 실행 방법
 
+[![tests](https://github.com/deploy103/mini-codex/actions/workflows/tests.yml/badge.svg)](https://github.com/deploy103/mini-codex/actions/workflows/tests.yml)
+
 `mini-codex`는 지금 폴더의 코드를 읽고, `.env`에 있는 APIM/OpenAI 키로 모델에게 작업을 요청한 뒤, 모델이 제안한 파일 수정과 검증 명령을 로컬에서 실행하는 작은 코딩 에이전트입니다.
 
 호스팅된 OpenAI Codex 자체는 아니고, Codex처럼 동작하도록 만든 로컬 CLI 도구입니다.
