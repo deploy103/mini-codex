@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from mini_codex.models import Edit
-from mini_codex.workspace import apply_edits, build_workspace_context, safe_workspace_path
+from mini_codex.workspace import apply_edits, apply_unified_patch, build_workspace_context, safe_workspace_path
 
 
 def test_safe_workspace_path_blocks_escape(tmp_path: Path):
@@ -44,6 +44,37 @@ def test_apply_edits_reports_line_delta_for_update_and_delete(tmp_path: Path):
     assert deleted[0].changed is True
     assert deleted[0].added_lines == 0
     assert deleted[0].removed_lines == 3
+
+
+def test_apply_edits_applies_unified_patch(tmp_path: Path):
+    target = tmp_path / "app.py"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    applied = apply_edits(
+        tmp_path,
+        [
+            Edit(
+                path="app.py",
+                action="patch",
+                content="@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n",
+            )
+        ],
+    )
+
+    assert applied[0].changed is True
+    assert applied[0].added_lines == 1
+    assert applied[0].removed_lines == 1
+    assert target.read_text(encoding="utf-8") == "one\nTWO\nthree\n"
+
+
+def test_apply_unified_patch_rejects_mismatched_context():
+    with pytest.raises(ValueError, match="does not match"):
+        apply_unified_patch("one\ntwo\n", "@@ -1,2 +1,2 @@\n one\n-three\n+THREE\n")
+
+
+def test_apply_edits_rejects_patch_for_missing_file(tmp_path: Path):
+    with pytest.raises(ValueError, match="Cannot patch missing file"):
+        apply_edits(tmp_path, [Edit(path="missing.py", action="patch", content="@@ -1 +1 @@\n-old\n+new\n")])
 
 
 def test_apply_edits_refuses_to_delete_directory(tmp_path: Path):

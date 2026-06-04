@@ -54,6 +54,8 @@ PowerShell에서 실행한다면 같은 방식으로 `./codex.ps1`을 쓰면 됩
 - 명령의 exit code, stdout, stderr
 - 최종 성공/실패 결과
 
+파일 수정은 전체 파일 교체뿐 아니라 단일 파일 unified diff patch도 처리할 수 있습니다.
+
 검증 명령의 stdout/stderr는 명령이 끝날 때까지 기다리지 않고 실행 중에도 바로 표시됩니다.
 
 실행 기록은 기본으로 `.mini_codex/runs/` 아래 Markdown 파일로 남습니다. 설정된 API 키가 명령 출력에 섞여 나오면 화면, 기록 파일, 다음 repair 요청에 `[redacted]`로 가려서 전달합니다.

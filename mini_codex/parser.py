@@ -48,10 +48,10 @@ def _parse_edit(item: Any) -> Edit:
     if not isinstance(item, dict):
         raise PlanParseError("Each edit must be an object.")
     action = _string(item.get("action"), "edit.action").lower()
-    if action not in {"create", "update", "delete"}:
+    if action not in {"create", "update", "delete", "patch"}:
         raise PlanParseError(f"Unsupported edit action: {action}")
     content = item.get("content")
-    if action in {"create", "update"} and not isinstance(content, str):
+    if action in {"create", "update", "patch"} and not isinstance(content, str):
         raise PlanParseError(f"Edit for {item.get('path')} needs string content.")
     return Edit(
         path=_string(item.get("path"), "edit.path"),

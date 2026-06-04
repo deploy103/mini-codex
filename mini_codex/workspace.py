@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -113,7 +114,14 @@ def apply_edits(root: Path, edits: list[Edit], *, dry_run: bool = False) -> list
             )
             continue
 
-        content = edit.content or ""
+        if edit.action == "patch":
+            if target.exists() and target.is_dir():
+                raise ValueError(f"Refusing to patch directory: {rel}")
+            if existing is None:
+                raise ValueError(f"Cannot patch missing file: {rel}")
+            content = apply_unified_patch(existing, edit.content or "", path=rel)
+        else:
+            content = edit.content or ""
         changed = existing != content
         added_lines, removed_lines = _line_delta(existing or "", content)
         if changed and not dry_run:
@@ -130,6 +138,71 @@ def apply_edits(root: Path, edits: list[Edit], *, dry_run: bool = False) -> list
         )
 
     return results
+
+
+def apply_unified_patch(original: str, patch: str, *, path: str = "<patch>") -> str:
+    original_lines = original.splitlines(keepends=True)
+    patch_lines = patch.splitlines(keepends=True)
+    output: list[str] = []
+    original_index = 0
+    patch_index = 0
+    saw_hunk = False
+
+    while patch_index < len(patch_lines):
+        line = patch_lines[patch_index]
+        if line.startswith(("diff --git ", "index ", "--- ", "+++ ")) or not line.strip():
+            patch_index += 1
+            continue
+        match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+        if match is None:
+            raise ValueError(f"Invalid patch line for {path}: {line.rstrip()}")
+        saw_hunk = True
+        hunk_start = int(match.group(1)) - 1
+        if hunk_start < original_index:
+            raise ValueError(f"Overlapping patch hunk for {path}.")
+        if hunk_start > len(original_lines):
+            raise ValueError(f"Patch hunk starts past end of {path}.")
+        output.extend(original_lines[original_index:hunk_start])
+        original_index = hunk_start
+        patch_index += 1
+
+        while patch_index < len(patch_lines):
+            hunk_line = patch_lines[patch_index]
+            if hunk_line.startswith("@@ "):
+                break
+            if hunk_line.startswith("\\"):
+                patch_index += 1
+                continue
+            if hunk_line.startswith(" "):
+                expected = hunk_line[1:]
+                _require_patch_match(original_lines, original_index, expected, path)
+                output.append(original_lines[original_index])
+                original_index += 1
+            elif hunk_line.startswith("-"):
+                expected = hunk_line[1:]
+                _require_patch_match(original_lines, original_index, expected, path)
+                original_index += 1
+            elif hunk_line.startswith("+"):
+                output.append(hunk_line[1:])
+            else:
+                raise ValueError(f"Invalid patch hunk line for {path}: {hunk_line.rstrip()}")
+            patch_index += 1
+
+    if not saw_hunk:
+        raise ValueError(f"Patch for {path} did not contain a unified diff hunk.")
+    output.extend(original_lines[original_index:])
+    return "".join(output)
+
+
+def _require_patch_match(original_lines: list[str], index: int, expected: str, path: str) -> None:
+    if index >= len(original_lines):
+        raise ValueError(f"Patch hunk for {path} expects content past end of file.")
+    actual = original_lines[index]
+    if actual == expected:
+        return
+    if actual.rstrip("\n") == expected.rstrip("\n"):
+        return
+    raise ValueError(f"Patch hunk for {path} does not match current file content.")
 
 
 def safe_workspace_path(root: Path, relative_path: str) -> Path:

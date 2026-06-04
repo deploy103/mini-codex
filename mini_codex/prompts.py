@@ -26,7 +26,7 @@ PLAN_SCHEMA = {
                 "required": ["path", "action", "content"],
                 "properties": {
                     "path": {"type": "string"},
-                    "action": {"type": "string", "enum": ["create", "update", "delete"]},
+                    "action": {"type": "string", "enum": ["create", "update", "delete", "patch"]},
                     "content": {"type": ["string", "null"]},
                 },
             },
@@ -58,6 +58,7 @@ Rules:
 - Never request absolute paths, path traversal, or edits to .env, secrets, credentials, or private key files.
 - Keep changes scoped to the user's task.
 - For create/update edits, provide the complete final file content.
+- For patch edits, provide a unified diff for exactly the target file in content.
 - For delete edits, set content to null.
 - Include verification commands when they are useful.
 - Make summary a concise next-activity statement.

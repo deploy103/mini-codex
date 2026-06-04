@@ -23,6 +23,24 @@ def test_parse_plan_from_json_fence():
     assert plan.done is True
 
 
+def test_parse_plan_accepts_patch_edit():
+    plan = parse_plan(
+        """
+        {
+          "summary": "patch",
+          "steps": [],
+          "edits": [{"path": "app.py", "action": "patch", "content": "@@ -1 +1 @@\\n-old\\n+new\\n"}],
+          "commands": [],
+          "done": true,
+          "notes": []
+        }
+        """
+    )
+
+    assert plan.edits[0].action == "patch"
+    assert plan.edits[0].content.startswith("@@")
+
+
 def test_parse_plan_allows_missing_steps_for_older_responses():
     plan = parse_plan(
         """
