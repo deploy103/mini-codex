@@ -6,6 +6,7 @@ import pytest
 from mini_codex.__main__ import (
     _extract_local_command,
     _resume_observations,
+    build_parser,
     build_test_command,
     list_recent_transcripts,
     main,
@@ -62,6 +63,15 @@ def test_build_test_command_uses_current_python_and_pytest_quiet():
     command = build_test_command("python", ["tests/test_cli_config.py"])
 
     assert command == ["python", "-m", "pytest", "-q", "tests/test_cli_config.py"]
+
+
+def test_parser_prints_version(capsys):
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["--version"])
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 0
+    assert "mini-codex 0.1.0" in captured.out
 
 
 def test_list_recent_transcripts_returns_newest_first(tmp_path: Path):

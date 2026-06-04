@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import __version__
 from .agent import AgentSettings, CodingAgent
 from .config import ALLOWED_API_MODES, load_config, load_redaction_values, validate_api_mode
 from .console import Console
@@ -40,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("task", nargs="*", help="Task to perform. If omitted, interactive mode starts.")
     parser.add_argument("--workspace", default=".", help="Workspace root. Defaults to current directory.")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--model", help="Override OPENAI_MODEL from .env.")
     parser.add_argument("--api-mode", choices=sorted(ALLOWED_API_MODES), help="Override OPENAI_API_MODE from .env.")
     parser.add_argument("--request-timeout", type=float, help="OpenAI/APIM request timeout in seconds.")
