@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -22,12 +24,19 @@ from .permissions import (
     save_permission_profile,
 )
 from .preflight import inspect_git_state
+from .workspace import is_sensitive_path
 
 
 PERMISSION_COMMAND_NAMES = {"permission", "permissions", "permision", "permisions"}
 LOCAL_COMMAND_NAMES = {"config", "doctor", "dry", "gui", "test", "logs", "last", "status", "diff"}
 APPROVAL_MODES = {"always", "never"}
 RESUME_TRANSCRIPT_LIMIT = 20_000
+PUBLIC_SAFE_EXAMPLE_NAMES = {".env.example"}
+OPENAI_KEY_LITERAL_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")
+PRIVATE_KEY_HEADER_RE = re.compile(r"-----BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----")
+SECRET_ASSIGNMENT_RE = re.compile(
+    r"\b[A-Z0-9_]*(?:API_KEY|APIM_KEY|_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)\s*[:=]\s*['\"]?([^'\"\s#]+)",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run a small OpenAI-powered local coding agent.",
         epilog=(
             "Local commands: config, doctor, dry, gui, test, logs, last, status, diff, "
+            "status --json, diff --json, "
             "permission list/show/new/delete. Slash forms such as /permission/new are also supported."
         ),
     )
@@ -65,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--command-output-limit", type=int, default=4_000, help="Maximum stdout/stderr characters shown per stream.")
     parser.add_argument("--gui", action="store_true", help="Open the desktop app window.")
     parser.add_argument("--doctor", action="store_true", help="Check local setup and resolved non-secret configuration.")
+    parser.add_argument(
+        "--public-safety",
+        action="store_true",
+        help="With --doctor, check tracked files for public repository safety without printing secret values.",
+    )
     parser.add_argument("--show-config", action="store_true", help="Print resolved non-secret configuration and exit.")
     return parser
 
@@ -192,6 +207,9 @@ def run_doctor(args: argparse.Namespace, console: Console) -> int:
             console.error(".env git ignore: .env is not ignored")
             ok = False
 
+    if getattr(args, "public_safety", False) and not run_public_safety_checks(workspace, console):
+        ok = False
+
     if os.access(workspace, os.W_OK):
         console.info("[ok] Workspace writable")
     else:
@@ -226,6 +244,122 @@ def run_doctor(args: argparse.Namespace, console: Console) -> int:
         approval_mode=approval_mode,
     )
     return 0 if ok else 1
+
+
+def run_public_safety_checks(workspace: Path, console: Console) -> bool:
+    workspace = workspace.resolve()
+    console.rule("Public Safety")
+    if not _workspace_is_git_repo(workspace):
+        console.error("Public safety: workspace is not a git repository")
+        return False
+
+    try:
+        tracked_paths = _git_tracked_paths(workspace)
+    except (OSError, subprocess.SubprocessError) as exc:
+        console.error(f"Public safety: git tracked-file check failed: {exc}")
+        return False
+
+    ok = True
+    sensitive_paths = [
+        path
+        for path in tracked_paths
+        if Path(path).name not in PUBLIC_SAFE_EXAMPLE_NAMES and is_sensitive_path(Path(path))
+    ]
+    if sensitive_paths:
+        console.error("Public safety tracked sensitive paths: " + _summarize_path_list(sensitive_paths))
+        ok = False
+
+    secret_literal_paths = _tracked_secret_literal_paths(workspace, tracked_paths)
+    if secret_literal_paths:
+        console.error("Public safety possible secret literals: " + _summarize_path_list(secret_literal_paths))
+        ok = False
+
+    if ok:
+        console.info("[ok] Public safety: no tracked sensitive paths or obvious secret literals")
+    return ok
+
+
+def _git_tracked_paths(workspace: Path) -> list[str]:
+    completed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=workspace,
+        text=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=15,
+        check=True,
+    )
+    decoded = completed.stdout.decode("utf-8", errors="replace")
+    return sorted(path for path in decoded.split("\0") if path)
+
+
+def _tracked_secret_literal_paths(workspace: Path, tracked_paths: list[str]) -> list[str]:
+    found: list[str] = []
+    for path in tracked_paths:
+        relative = Path(path)
+        if relative.name in PUBLIC_SAFE_EXAMPLE_NAMES:
+            continue
+        if is_sensitive_path(relative):
+            continue
+        target = workspace / relative
+        if not target.is_file():
+            continue
+        try:
+            if target.stat().st_size > 1_000_000:
+                continue
+            text = target.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if _text_has_secret_literal(text):
+            found.append(path)
+    return sorted(found)
+
+
+def _text_has_secret_literal(text: str) -> bool:
+    if OPENAI_KEY_LITERAL_RE.search(text) or PRIVATE_KEY_HEADER_RE.search(text):
+        return True
+    for match in SECRET_ASSIGNMENT_RE.finditer(text):
+        if _looks_like_real_secret_value(match.group(1)):
+            return True
+    return False
+
+
+def _looks_like_real_secret_value(value: str) -> bool:
+    normalized = value.strip().strip("'\"").lower()
+    if not normalized:
+        return False
+    placeholders = (
+        "test",
+        "dummy",
+        "example",
+        "placeholder",
+        "secret",
+        "your",
+        "changeme",
+        "replace",
+        "redacted",
+        "none",
+        "null",
+        "xxx",
+        "<",
+        "{",
+        "openai-",
+        "apim-",
+        "shell-",
+        "file-",
+        "github-",
+        "first-",
+        "second-",
+    )
+    if normalized.startswith(placeholders):
+        return False
+    return len(normalized) >= 8
+
+
+def _summarize_path_list(paths: list[str], *, limit: int = 20) -> str:
+    shown = paths[:limit]
+    suffix = f" (+{len(paths) - limit} more)" if len(paths) > limit else ""
+    return ", ".join(shown) + suffix
 
 
 def run_permission_command(workspace: Path, words: list[str], console: Console) -> int:
@@ -287,11 +421,8 @@ def run_last_command(workspace: Path, console: Console) -> int:
     return 0
 
 
-def run_status_command(workspace: Path, console: Console) -> int:
+def run_status_command(workspace: Path, console: Console, *, json_output: bool = False) -> int:
     workspace = workspace.resolve()
-    console.rule("Status")
-    console.info(f"Version: {__version__}")
-    console.info(f"Workspace: {workspace}")
     if not workspace.exists():
         console.error(f"Workspace not found: {workspace}")
         return 1
@@ -299,23 +430,48 @@ def run_status_command(workspace: Path, console: Console) -> int:
         console.error(f"Workspace is not a directory: {workspace}")
         return 1
 
+    payload: dict[str, object] = {
+        "version": __version__,
+        "workspace": str(workspace),
+    }
     try:
         git_state = inspect_git_state(workspace)
     except (OSError, subprocess.SubprocessError) as exc:
-        console.warn(f"Git status unavailable: {exc}")
+        payload["git"] = {"available": False, "error": str(exc)}
     else:
-        console.info(f"Git: {'repository' if git_state.is_repo else 'not a repository'}")
-        for line in git_state.output.splitlines() or ["clean"]:
-            console.plan_item(line)
+        payload["git"] = {
+            "available": True,
+            "is_repo": git_state.is_repo,
+            "command": git_state.command,
+            "returncode": git_state.returncode,
+            "lines": git_state.output.splitlines() or ["clean"],
+        }
 
     recent = list_recent_transcripts(workspace, limit=1)
-    console.info(f"Latest transcript: {recent[0] if recent else 'none'}")
-    profiles = ", ".join(profile.name for profile in list_permission_profiles(workspace))
+    payload["latest_transcript"] = str(recent[0]) if recent else None
+    payload["permission_profiles"] = [profile.name for profile in list_permission_profiles(workspace)]
+
+    if json_output:
+        console.info(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    console.rule("Status")
+    console.info(f"Version: {payload['version']}")
+    console.info(f"Workspace: {payload['workspace']}")
+    git_payload = payload.get("git", {})
+    if isinstance(git_payload, dict) and git_payload.get("available"):
+        console.info(f"Git: {'repository' if git_payload.get('is_repo') else 'not a repository'}")
+        for line in git_payload.get("lines", []) or ["clean"]:
+            console.plan_item(str(line))
+    elif isinstance(git_payload, dict):
+        console.warn(f"Git status unavailable: {git_payload.get('error')}")
+    console.info(f"Latest transcript: {payload['latest_transcript'] or 'none'}")
+    profiles = ", ".join(str(name) for name in payload["permission_profiles"])
     console.info(f"Permission profiles: {profiles or 'none'}")
     return 0
 
 
-def run_diff_command(workspace: Path, console: Console) -> int:
+def run_diff_command(workspace: Path, console: Console, *, json_output: bool = False) -> int:
     workspace = workspace.resolve()
     if not workspace.exists():
         console.error(f"Workspace not found: {workspace}")
@@ -324,7 +480,8 @@ def run_diff_command(workspace: Path, console: Console) -> int:
         console.error(f"Workspace is not a directory: {workspace}")
         return 1
 
-    console.rule("Diff")
+    if not json_output:
+        console.rule("Diff")
     try:
         git_state = inspect_git_state(workspace)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -335,6 +492,7 @@ def run_diff_command(workspace: Path, console: Console) -> int:
         return 1
 
     code = 0
+    sections: list[dict[str, object]] = []
     for title, command in (
         ("Staged changes", ["git", "diff", "--cached", "--stat"]),
         ("Unstaged changes", ["git", "diff", "--stat"]),
@@ -351,8 +509,28 @@ def run_diff_command(workspace: Path, console: Console) -> int:
             console.error((completed.stderr or completed.stdout or "git diff failed").strip())
             code = completed.returncode
             continue
-        console.info(f"{title}:")
         output = completed.stdout.strip()
+        sections.append(
+            {
+                "title": title,
+                "command": command,
+                "returncode": completed.returncode,
+                "stat": output,
+            }
+        )
+
+    if json_output:
+        payload = {
+            "workspace": str(workspace),
+            "is_repo": True,
+            "sections": sections,
+        }
+        console.info(json.dumps(payload, indent=2, sort_keys=True))
+        return code
+
+    for section in sections:
+        console.info(f"{section['title']}:")
+        output = str(section["stat"])
         console.info(output if output else "none")
     return code
 
@@ -535,9 +713,17 @@ def main(argv: list[str] | None = None) -> int:
         if kind == "last":
             return run_last_command(Path(workspace), console)
         if kind == "status":
-            return run_status_command(Path(workspace), console)
+            json_output, remaining = _extract_json_flag(words)
+            if remaining:
+                console.error(f"Unknown status option: {remaining[0]}")
+                return 2
+            return run_status_command(Path(workspace), console, json_output=json_output)
         if kind == "diff":
-            return run_diff_command(Path(workspace), console)
+            json_output, remaining = _extract_json_flag(words)
+            if remaining:
+                console.error(f"Unknown diff option: {remaining[0]}")
+                return 2
+            return run_diff_command(Path(workspace), console, json_output=json_output)
         if kind == "test":
             return run_test_command(Path(workspace), words, console)
         raw_argv = words
@@ -619,9 +805,19 @@ def main(argv: list[str] | None = None) -> int:
                     elif kind == "last":
                         code = run_last_command(Path(workspace), console)
                     elif kind == "status":
-                        code = run_status_command(Path(workspace), console)
+                        json_output, remaining = _extract_json_flag(words)
+                        if remaining:
+                            console.error(f"Unknown status option: {remaining[0]}")
+                            code = 2
+                        else:
+                            code = run_status_command(Path(workspace), console, json_output=json_output)
                     elif kind == "diff":
-                        code = run_diff_command(Path(workspace), console)
+                        json_output, remaining = _extract_json_flag(words)
+                        if remaining:
+                            console.error(f"Unknown diff option: {remaining[0]}")
+                            code = 2
+                        else:
+                            code = run_diff_command(Path(workspace), console, json_output=json_output)
                     elif kind == "test":
                         code = run_test_command(Path(workspace), words, console)
                     else:
@@ -667,6 +863,17 @@ def _extract_local_command(argv: list[str]) -> tuple[str, str, list[str]] | None
     if kind == "gui":
         return kind, workspace, ["--workspace", workspace, "--gui", *words]
     return kind, workspace, words
+
+
+def _extract_json_flag(words: list[str]) -> tuple[bool, list[str]]:
+    json_output = False
+    remaining: list[str] = []
+    for word in words:
+        if word == "--json":
+            json_output = True
+        else:
+            remaining.append(word)
+    return json_output, remaining
 
 
 def _local_words_from_text(text: str, *, workspace: str) -> tuple[str, str, list[str]] | None:

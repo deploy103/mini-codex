@@ -283,7 +283,7 @@ def _line_delta(old: str, new: str) -> tuple[int, int]:
     return added, removed
 
 
-def _is_sensitive_path(path: Path) -> bool:
+def is_sensitive_path(path: Path) -> bool:
     parts = set(path.parts)
     name = path.name
     if name in IGNORED_FILE_NAMES or name in SENSITIVE_FILE_NAMES:
@@ -298,6 +298,9 @@ def _is_sensitive_path(path: Path) -> bool:
     if "credential" in lowered or "secret" in lowered:
         return True
     return False
+
+
+_is_sensitive_path = is_sensitive_path
 
 
 def _is_git_ignored(root: Path, relative_path: Path) -> bool:

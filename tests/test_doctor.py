@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-from mini_codex.__main__ import build_parser, run_doctor
+from mini_codex.__main__ import build_parser, run_doctor, run_public_safety_checks
 from mini_codex.console import Console
 
 
@@ -103,3 +103,43 @@ def test_run_doctor_fails_when_env_is_tracked(tmp_path: Path, monkeypatch, capsy
     captured = capsys.readouterr()
     assert code == 1
     assert ".env is tracked by git" in captured.err
+
+
+def test_run_public_safety_checks_allows_env_example(tmp_path: Path, capsys):
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (tmp_path / ".env.example").write_text("APIM_KEY=\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".env.example"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    ok = run_public_safety_checks(tmp_path, Console())
+
+    captured = capsys.readouterr()
+    assert ok is True
+    assert "[ok] Public safety" in captured.out
+
+
+def test_run_public_safety_checks_flags_tracked_sensitive_filename(tmp_path: Path, capsys):
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (tmp_path / "id_ed25519").write_text("private key\n", encoding="utf-8")
+    subprocess.run(["git", "add", "id_ed25519"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    ok = run_public_safety_checks(tmp_path, Console())
+
+    captured = capsys.readouterr()
+    assert ok is False
+    assert "tracked sensitive paths" in captured.err
+    assert "id_ed25519" in captured.err
+
+
+def test_run_public_safety_checks_flags_secret_literals_without_printing_values(tmp_path: Path, capsys):
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    fake_key = "sk-" + ("a" * 24)
+    (tmp_path / "app.py").write_text(f"OPENAI_API_KEY = '{fake_key}'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    ok = run_public_safety_checks(tmp_path, Console())
+
+    captured = capsys.readouterr()
+    assert ok is False
+    assert "possible secret literals" in captured.err
+    assert "app.py" in captured.err
+    assert fake_key not in captured.err

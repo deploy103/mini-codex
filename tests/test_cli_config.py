@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -52,6 +53,12 @@ def test_extract_local_status_alias_does_not_become_model_task():
     command = _extract_local_command(["--workspace", "/tmp/work", "status"])
 
     assert command == ("status", "/tmp/work", [])
+
+
+def test_extract_local_status_json_alias_does_not_become_model_task():
+    command = _extract_local_command(["--workspace", "/tmp/work", "status", "--json"])
+
+    assert command == ("status", "/tmp/work", ["--json"])
 
 
 def test_extract_local_diff_alias_does_not_become_model_task():
@@ -127,6 +134,32 @@ def test_main_status_alias_does_not_require_api_key(tmp_path: Path, monkeypatch,
     assert "Permission profiles:" in captured.out
 
 
+def test_main_status_json_alias_does_not_require_api_key(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("APIM_KEY", raising=False)
+
+    code = main(["--workspace", str(tmp_path), "status", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == 0
+    assert payload["version"] == "0.1.0"
+    assert payload["workspace"] == str(tmp_path.resolve())
+    assert payload["latest_transcript"] is None
+    assert "permission_profiles" in payload
+
+
+def test_main_status_unknown_option_fails_before_api_config(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("APIM_KEY", raising=False)
+
+    code = main(["--workspace", str(tmp_path), "status", "--bad"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "Unknown status option: --bad" in captured.err
+
+
 def test_main_diff_alias_does_not_require_api_key(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("APIM_KEY", raising=False)
@@ -140,6 +173,35 @@ def test_main_diff_alias_does_not_require_api_key(tmp_path: Path, monkeypatch, c
     assert code == 0
     assert "Staged changes:" in captured.out
     assert "demo.txt" in captured.out
+
+
+def test_main_diff_json_alias_does_not_require_api_key(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("APIM_KEY", raising=False)
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (tmp_path / "demo.txt").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "demo.txt"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    code = main(["--workspace", str(tmp_path), "diff", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == 0
+    assert payload["workspace"] == str(tmp_path.resolve())
+    assert payload["is_repo"] is True
+    assert payload["sections"][0]["title"] == "Staged changes"
+    assert "demo.txt" in payload["sections"][0]["stat"]
+
+
+def test_main_diff_unknown_option_fails_before_api_config(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("APIM_KEY", raising=False)
+
+    code = main(["--workspace", str(tmp_path), "diff", "--bad"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "Unknown diff option: --bad" in captured.err
 
 
 def test_run_diff_command_rejects_non_git_workspace(tmp_path: Path, capsys):
