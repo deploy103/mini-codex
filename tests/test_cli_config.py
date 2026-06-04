@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -81,8 +82,8 @@ def test_list_recent_transcripts_returns_newest_first(tmp_path: Path):
     newer = run_dir / "newer.md"
     older.write_text("old", encoding="utf-8")
     newer.write_text("new", encoding="utf-8")
-    older.touch()
-    newer.touch()
+    os.utime(older, (1, 1))
+    os.utime(newer, (2, 2))
 
     assert list_recent_transcripts(tmp_path, limit=1) == [newer]
 
