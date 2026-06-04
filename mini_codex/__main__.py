@@ -180,6 +180,12 @@ def run_doctor(args: argparse.Namespace, console: Console) -> int:
         console.info(f"[ok] .env: {env_path}")
     else:
         console.warn(".env: not found; shell environment variables may still work")
+    if _workspace_is_git_repo(workspace):
+        if _git_check_ignore(workspace, ".env"):
+            console.info("[ok] .env git ignore: .env is ignored")
+        else:
+            console.error(".env git ignore: .env is not ignored")
+            ok = False
 
     if os.access(workspace, os.W_OK):
         console.info("[ok] Workspace writable")
@@ -395,6 +401,29 @@ def _resume_observations(workspace: Path, console: Console) -> tuple[str, ...]:
         prefix = f"Previous run transcript ({path.name}):"
     console.info(f"Resuming from transcript: {path}")
     return (f"{prefix}\n{text}",)
+
+
+def _workspace_is_git_repo(workspace: Path) -> bool:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=15,
+    )
+    return completed.returncode == 0
+
+
+def _git_check_ignore(workspace: Path, relative_path: str) -> bool:
+    completed = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--", relative_path],
+        cwd=workspace,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=15,
+    )
+    return completed.returncode == 0
 
 
 def build_permission_parser() -> argparse.ArgumentParser:

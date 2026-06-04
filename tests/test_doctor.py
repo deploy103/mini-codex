@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 from mini_codex.__main__ import build_parser, run_doctor
@@ -49,3 +50,38 @@ def test_run_doctor_stops_on_missing_workspace(tmp_path: Path, monkeypatch, caps
     assert code == 1
     assert "Workspace not found" in captured.err
     assert "Config loaded" not in captured.out
+
+
+def test_run_doctor_checks_env_is_gitignored(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("APIM_KEY", raising=False)
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (tmp_path / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        "APIM_BASE_URL=https://gateway.example.test\nAPIM_KEY=test-key\nCHAT_MODEL=test-model\n",
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args(["--workspace", str(tmp_path), "--doctor"])
+
+    code = run_doctor(args, Console())
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert ".env git ignore" in captured.out
+
+
+def test_run_doctor_fails_when_env_is_not_gitignored(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("APIM_KEY", raising=False)
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (tmp_path / ".env").write_text(
+        "APIM_BASE_URL=https://gateway.example.test\nAPIM_KEY=test-key\nCHAT_MODEL=test-model\n",
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args(["--workspace", str(tmp_path), "--doctor"])
+
+    code = run_doctor(args, Console())
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert ".env is not ignored" in captured.err
